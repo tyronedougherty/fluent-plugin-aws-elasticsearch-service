@@ -101,18 +101,11 @@ module Fluent
       credentials = nil
 
       if ep.access_key.empty? or ep.secret_key.empty?
-          instance = Aws::InstanceProfileCredentials.new
-          credentials = if instance.credentials.empty?
-                          shared = Aws::SharedCredentials.new
-                          shared.credentials
-                        else
-                          instance.credentials
-                        end
+        credentials   = Aws::InstanceProfileCredentials.new.credentials
+        credentials ||= Aws::SharedCredentials.new.credentials
       end
 
-      if credentials.empty?
-        credentials = Aws::Credentials.new access_key, secret_key
-      end
+      credentials ||= Aws::Credentials.new access_key, secret_key
       credentials
     end
 
