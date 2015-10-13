@@ -3,7 +3,9 @@
 require 'rubygems'
 require 'fluent/plugin/out_elasticsearch'
 require 'aws-sdk'
-require 'openssl'
+require 'faraday_middleware'
+require 'faraday_middleware/aws_signers_v4'
+
 
 module Fluent
   class AwsElasticsearchServiceOutput < ElasticsearchOutput
@@ -13,8 +15,8 @@ module Fluent
     config_section :endpoint do
       config_param :region, :string
       config_param :url, :string
-      config_param :access_key, :string
-      config_param :secret_key, :string
+      config_param :access_key_id, :string, :default => ""
+      config_param :secret_access_key, :string, :default => ""
     end
 
     config_param :logstash_format, :bool, :default => false
@@ -39,33 +41,36 @@ module Fluent
     config_set_default :include_tag_key, false
 
     def client
-      @_es ||= begin
-                 excon_options = { client_key: @client_key, client_cert: @client_cert, client_key_pass: @client_key_pass }
-                 adapter_conf = lambda {|f| f.adapter :excon, excon_options }
-                 transport = Faraday.new(get_connection_options.merge(
-                                                                                     options: {
-                                                                                       reload_connections: @reload_connections,
-                                                                                       reload_on_failure: @reload_on_failure,
-                                                                                       retry_on_failure: 5,
-                                                                                       transport_options: {
-                                                                                         request: { timeout: @request_timeout },
-                                                                                         ssl: { verify: @ssl_verify, ca_file: @ca_file }
-                                                                                       }
-                                                                                     }), &adapter_conf)
-                 es = Elasticsearch::Client.new transport: transport
-                 
-                 begin
-                   raise ConnectionFailure, "Can not reach Elasticsearch cluster (#{connection_options_description})!" unless es.ping
-                 rescue *es.transport.host_unreachable_exceptions => e
-                   raise ConnectionFailure, "Can not reach Elasticsearch cluster (#{connection_options_description})! #{e.message}"
-                 end
-
-                 log.info "Connection opened to Elasticsearch cluster => #{connection_options_description}"
-                 es
-               end
+      @_es ||=
+        begin
+          excon_options = { client_key: @client_key, client_cert: @client_cert, client_key_pass: @client_key_pass }
+          adapter_conf = lambda {|f| f.adapter :excon, excon_options }
+          #adapter_conf = lambda {|f| f.adapter :net_http}
+          transport = Faraday.new(
+            get_connection_options.merge(
+            options: {
+              reload_connections: @reload_connections,
+              reload_on_failure: @reload_on_failure,
+              retry_on_failure: 5,
+              transport_options: {
+                request: { timeout: @request_timeout },
+                ssl: { verify: @ssl_verify, ca_file: @ca_file }
+              }
+            }), &adapter_conf)
+          es = Elasticsearch::Client.new transport: transport
+ 
+          begin
+            raise ConnectionFailure, "Can not reach Elasticsearch cluster (#{connection_options_description})!" unless es.ping
+          rescue *es.transport.host_unreachable_exceptions => e
+            raise ConnectionFailure, "Can not reach Elasticsearch cluster (#{connection_options_description})! #{e.message}"
+          end
+ 
+          log.info "Connection opened to Elasticsearch cluster => #{connection_options_description}"
+          es
+        end
     end
 
-    def get_connection_options
+    def get_connecton_options
       raise "`endpoint` require." if @endpoint.empty?
       
       hosts =
@@ -77,22 +82,9 @@ module Fluent
               hash
             end
 
-            access_key = if ep.access_key
-                           ep.access_key
-                         else
-                           credentials().access_key_id
-                         end
-#            secret_key = if ep.secret_key
-#                           ep.secret_key
-#                         else
-#                           credentials().secret_access_key
-#                         end
-
-            host[:connection_options] = {
-              :access_key => access_key,
-#              :secret_key => secret_key
-              :region => ep.region
-            }
+            host[:credentials] = credentials(ep.access_key_id, ep.secret_access_key)
+            host[:region] = ep.region
+            
             host
           end
         end
@@ -102,9 +94,13 @@ module Fluent
       }
     end
 
-    def credentials
-      @aws_credentials ||=
-        begin
+
+    private
+
+    def credentials(access_key, secret_key)
+      credentials = nil
+
+      if ep.access_key.empty? or ep.secret_key.empty?
           instance = Aws::InstanceProfileCredentials.new
           credentials = if instance.credentials.empty?
                           shared = Aws::SharedCredentials.new
@@ -112,33 +108,16 @@ module Fluent
                         else
                           instance.credentials
                         end
-          
-          credentials
-        end
+      end
+
+      if credentials.empty?
+        credentials = Aws::Credentials.new access_key, secret_key
+      end
+      credentials
     end
 
 
     class Faraday < Elasticsearch::Transport::Transport::HTTP::Faraday
-      # Performs the request by invoking {Transport::Base#perform_request} with a block.
-      #
-      # @return [Response]
-      # @see    Transport::Base#perform_request
-      #
-      def perform_request(method, path, params={}, body=nil)
-        super do |connection, url|
-          
-          response = connection.connection.run_request(
-            method.downcase.to_sym,
-            url,
-            ( body ? __convert_to_json(body) : nil ),
-            {
-              Authorization: authorization(connection)
-            }
-          )
-          Response.new response.status, response.body, response.headers
-        end
-      end
-
       # Builds and returns a collection of connections.
       #
       # @return [Connections::Collection]
@@ -155,7 +134,7 @@ module Fluent
               :connection => ::Faraday::Connection.new(
                 url,
                 (options[:transport_options] || {}),
-                &@block
+                &faraday_conf(host, &@block)
               ),
               :options => host[:connection_options]
             )
@@ -165,27 +144,14 @@ module Fluent
         )
       end
 
-
-      def authorization()
-
-      end
-
-      def signature(connection, datestring)
-        getSignatureKey(
-          
-        )
-      end
-
-      # 
-      #
-      # @see https://docs.aws.amazon.com/ja_jp/general/latest/gr/signature-v4-examples.html#signature-v4-examples-ruby
-      #
-      def getSignatureKey key, dateStamp, regionName, serviceName = 'es'
-        kDate    = OpenSSL::HMAC.digest('sha256', "AWS4" + key, dateStamp)
-        kRegion  = OpenSSL::HMAC.digest('sha256', kDate, regionName)
-        kService = OpenSSL::HMAC.digest('sha256', kRegion, serviceName)
-        kSigning = OpenSSL::HMAC.digest('sha256', kService, "aws4_request")
-        kSigning
+      def faraday_conf(host, &block)
+        lambda do |faraday|
+          faraday.request :aws_signers_v4,
+                          credentials: host.credentials,
+                          service_name: 'es',
+                          region: host.region
+          block.call faraday
+        end
       end
     end
 
