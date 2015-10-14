@@ -5,12 +5,12 @@ $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 
 Gem::Specification.new do |spec|
   spec.name          = "fluent-plugin-aws-elasticsearch-service"
-  spec.version       = "0.0.1"
+  spec.version       = "0.0.2"
   spec.authors       = ["atomita"]
   spec.email         = ["sleeping.cait.sith+gh@gmail.com"]
 
   spec.summary       = %q{Output plugin to post to "Amazon Elasticsearch Service".}
-  spec.description   = %q{Output plugin to post to "Amazon Elasticsearch Service".}
+  spec.description   = %q{this is a Output plugin. Post to "Amazon Elasticsearch Service".}
   spec.homepage      = "https://github.com/atomita/fluent-plugin-aws-elasticsearch-service"
   spec.license       = "MIT"
 
@@ -22,7 +22,8 @@ Gem::Specification.new do |spec|
 
   spec.add_development_dependency "bundler", "~> 1.10"
   spec.add_development_dependency "rake", "~> 10.0"
-  spec.add_development_dependency "rspec", "~> 3.0.0"
-  spec.add_runtime_dependency "fluentd"
-  spec.add_runtime_dependency "fluent-plugin-elasticsearch"
+  spec.add_development_dependency "rspec", "~> 3.0"
+  spec.add_runtime_dependency "fluentd", "~> 0"
+  spec.add_runtime_dependency "fluent-plugin-elasticsearch", "~> 1.0"
+  spec.add_runtime_dependency "aws-sdk", "~> 2"
 end
