@@ -46,7 +46,7 @@ module Fluent
 #          excon_options = { client_key: @client_key, client_cert: @client_cert, client_key_pass: @client_key_pass }
 #          adapter_conf = lambda {|f| f.adapter :excon, excon_options }
 #          #adapter_conf = lambda {|f| f.adapter :net_http}
-#          transport = Faraday.new(
+#          transport = ElasticsearchOutput::Elasticsearch::Transport::Transport::HTTP::Faraday.new(
 #            get_connection_options.merge(
 #            options: {
 #              reload_connections: @reload_connections,
@@ -70,21 +70,21 @@ module Fluent
 #        end
 #    end
 
-    def get_connecton_options
+    def get_connection_options
       raise "`endpoint` require." if @endpoint.empty?
       
       hosts =
         begin
           @endpoint.map do |ep|
-            uri = URI(ep.url)
+            uri = URI(ep[:url])
             host = %w(user password path).inject(host: uri.host, port: uri.port, scheme: uri.scheme) do |hash, key|
               hash[key.to_sym] = uri.public_send(key) unless uri.public_send(key).nil? || uri.public_send(key) == ''
               hash
             end
 
             host[:aws_elasticsearch_service] = {
-              :credentials => credentials(ep.access_key_id, ep.secret_access_key),
-              :region => ep.region
+              :credentials => credentials(ep[:access_key_id], ep[:secret_access_key]),
+              :region => ep[:region]
             }
             
             host
@@ -102,7 +102,7 @@ module Fluent
     def credentials(access_key, secret_key)
       credentials = nil
 
-      if ep.access_key.empty? or ep.secret_key.empty?
+      if access_key.empty? or secret_key.empty?
         credentials   = Aws::InstanceProfileCredentials.new.credentials
         credentials ||= Aws::SharedCredentials.new.credentials
       end
@@ -112,19 +112,19 @@ module Fluent
     end
 
 
-    class ElasticsearchOutput::Elasticsearch::Transport::Transport::HTTP::Faraday < ::Elasticsearch::Transport::Transport::HTTP::Faraday
+    class ElasticsearchOutput::Elasticsearch::Transport::Transport::HTTP::Faraday
       # Builds and returns a collection of connections.
       #
       # @return [Connections::Collection]
       #
       def __build_connections
-        Connections::Collection.new(
+        Elasticsearch::Transport::Transport::Connections::Collection.new(
           :connections => hosts.map { |host|
             host[:protocol]   = host[:scheme] || DEFAULT_PROTOCOL
             host[:port]     ||= DEFAULT_PORT
             url               = __full_url(host)
 
-            Connections::Connection.new(
+            Elasticsearch::Transport::Transport::Connections::Connection.new(
               :host => host,
               :connection => ::Faraday::Connection.new(
                 url,
@@ -141,11 +141,11 @@ module Fluent
 
       def faraday_conf(host, &block)
         lambda do |faraday|
-          if host.aws_elasticsearch_service
+          if host[:aws_elasticsearch_service]
             faraday.request :aws_signers_v4,
-                            credentials: host.aws_elasticsearch_service.credentials,
+                            credentials: host[:aws_elasticsearch_service][:credentials],
                             service_name: 'es',
-                            region: host.aws_elasticsearch_service.region
+                            region: host[:aws_elasticsearch_service][:region]
           end
           block.call faraday
         end
